@@ -150,12 +150,41 @@ export async function replaceAddress(file: File, matches: Match[], newText: stri
             color: rgb(1, 1, 1),
         });
 
-        page.drawText(newText, {
-            x: x,
-            y: y,
-            size: height > 5 ? height : 12,
-            font: helveticaFont,
-            color: rgb(0, 0, 0),
+        // Heuristic: If height > 24, it's likely a manual block selection, not a single line font height.
+        const isBlock = height > 24;
+        const fontSize = isBlock ? 12 : (height > 5 ? height : 12);
+        const lineHeight = fontSize * 1.2;
+
+        const lines = newText.split('\n');
+
+        // Calculate starting Y position
+        let startY;
+        if (isBlock) {
+            // Vertically center in the block
+            // y is the bottom of the block
+            const boxCenterY = y + (height / 2);
+            const textBlockHalfHeight = ((lines.length - 1) * lineHeight) / 2;
+            // We adjust so the middle of the text block hits the center of the box
+            // Note: PDF text draws from baseline. The "middle" of a line is roughly baseline + fontSize/3.
+            // But simpler baseline centering:
+            startY = boxCenterY + textBlockHalfHeight - (fontSize / 4);
+        } else {
+            // Standard baseline
+            startY = y;
+        }
+
+        lines.forEach((line, index) => {
+            const textWidth = helveticaFont.widthOfTextAtSize(line, fontSize);
+            const centeredX = x + (width / 2) - (textWidth / 2);
+            const lineY = startY - (index * lineHeight);
+
+            page.drawText(line, {
+                x: centeredX,
+                y: lineY,
+                size: fontSize,
+                font: helveticaFont,
+                color: rgb(0, 0, 0),
+            });
         });
     }
 
