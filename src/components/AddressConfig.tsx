@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { FileText, Search, Download, RefreshCw, CheckCircle, AlertCircle, Eye, EyeOff, MousePointer2, Save, Trash2, Layers } from 'lucide-react';
+import { FileText, Search, Download, RefreshCw, CheckCircle, AlertCircle, Eye, EyeOff, MousePointer2, Save, Trash2, Layers, Move } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { findMatches, replaceAddress, getPdfText, type Match } from '../lib/pdf-utils';
+import { findMatches, replaceAddress, getPdfText, shiftPageContent, type Match } from '../lib/pdf-utils';
 import { PdfPreview } from './PdfPreview';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -18,14 +18,15 @@ interface AddressConfigProps {
 const STORAGE_KEY = 'pdf-fixer-config';
 
 interface SavedConfig {
-    mode: 'auto' | 'manual';
+    mode: 'auto' | 'manual' | 'layout';
     searchText: string;
     newAddress: string;
     manualSelection: Match | null;
+    pageShift?: { x: number, y: number };
 }
 
 export function AddressConfig({ file, onReset }: AddressConfigProps) {
-    const [mode, setMode] = useState<'auto' | 'manual'>('auto');
+    const [mode, setMode] = useState<'auto' | 'manual' | 'layout'>('auto');
 
     // Auto Search State
     const [searchText, setSearchText] = useState('');
@@ -35,6 +36,7 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
     const [manualSelection, setManualSelection] = useState<Match | null>(null);
     const [numPages, setNumPages] = useState(0);
     const [applyToAll, setApplyToAll] = useState(false);
+    const [pageShift, setPageShift] = useState({ x: 0, y: 0 });
 
     // Common State
     const [newAddress, setNewAddress] = useState('123 New Address St,\nNew City, State 12345');
@@ -58,6 +60,7 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                 if (config.newAddress) setNewAddress(config.newAddress);
                 if (config.searchText) setSearchText(config.searchText);
                 if (config.manualSelection) setManualSelection(config.manualSelection);
+                if (config.pageShift) setPageShift(config.pageShift);
                 if (config.mode) setMode(config.mode);
                 setHasLoadedConfig(true);
             }
@@ -71,7 +74,8 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
             mode,
             searchText,
             newAddress,
-            manualSelection
+            manualSelection,
+            pageShift
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     };
@@ -79,10 +83,6 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
     const clearConfig = () => {
         localStorage.removeItem(STORAGE_KEY);
         setHasLoadedConfig(false);
-        // Optional: Reset state to defaults?
-        // setNewAddress('123 New Address St,\nNew City, State 12345');
-        // setManualSelection(null);
-        // setMode('auto');
         setStatusMsg("Saved settings cleared.");
     };
 
@@ -117,10 +117,6 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
 
     const handleManualSelection = (rect: { x: number; y: number; width: number; height: number; pageIndex: number; viewportHeight: number } | null) => {
         if (!rect) {
-            // Don't clear manual selection immediately if we are just clicking elsewhere?
-            // Actually PdfPreview sends null on mouseDown.
-            // But we want to persist the OLD selection until a NEW valid one is made?
-            // No, standard UX is click to clear.
             setManualSelection(null);
             setStatus('idle');
             return;
@@ -145,34 +141,38 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
         setStatusMsg("Applying changes...");
 
         try {
-            // Save config automatically on successful process attempt
             saveConfig();
             setHasLoadedConfig(true);
 
             await new Promise(r => setTimeout(r, 1000));
 
-            await new Promise(r => setTimeout(r, 1000));
-
             let matchesToUse: Match[] = [];
-
             if (mode === 'auto') {
                 matchesToUse = matches;
             } else if (manualSelection) {
                 if (applyToAll && numPages > 0) {
-                    // Create a match for every page
                     for (let i = 0; i < numPages; i++) {
-                        matchesToUse.push({
-                            ...manualSelection,
-                            pageIndex: i
-                        });
+                        matchesToUse.push({ ...manualSelection, pageIndex: i });
                     }
                 } else {
                     matchesToUse = [manualSelection];
                 }
             }
 
-            const blob = await replaceAddress(file, matchesToUse, newAddress);
-            const url = URL.createObjectURL(blob);
+            // 1. Replace Address (if any)
+            let currentBlob: Blob = file;
+            if (matchesToUse.length > 0) {
+                currentBlob = await replaceAddress(new File([file], "tmp.pdf"), matchesToUse, newAddress);
+            } else if (mode === 'layout' && matchesToUse.length === 0) {
+                currentBlob = file;
+            }
+
+            // 2. Shift Content
+            if (pageShift.x !== 0 || pageShift.y !== 0) {
+                currentBlob = await shiftPageContent(currentBlob, pageShift.x, -pageShift.y);
+            }
+
+            const url = URL.createObjectURL(currentBlob);
             const a = document.createElement('a');
             a.href = url;
             a.download = `updated_${file.name}`;
@@ -211,7 +211,9 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
     }
 
     const canProcess = status !== 'processing' &&
-        ((mode === 'auto' && matches.length > 0) || (mode === 'manual' && manualSelection !== null));
+        ((mode === 'auto' && matches.length > 0) ||
+            (mode === 'manual' && manualSelection !== null) ||
+            (mode === 'layout' && (pageShift.x !== 0 || pageShift.y !== 0)));
 
     return (
         <div className="w-full max-w-4xl mx-auto mt-10 pb-20">
@@ -303,6 +305,16 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                         <MousePointer2 className="w-4 h-4" />
                         Manual Select
                     </button>
+                    <button
+                        onClick={() => { setMode('layout'); setStatus('idle'); }}
+                        className={cn(
+                            "flex-1 py-4 text-sm font-bold flex items-center justify-center gap-2 transition-colors",
+                            mode === 'layout' ? "bg-blue-50 text-blue-600 border-b-2 border-blue-600" : "text-slate-500 hover:bg-slate-50"
+                        )}
+                    >
+                        <Move className="w-4 h-4" />
+                        Page Layout
+                    </button>
                 </div>
 
                 <div className="p-8">
@@ -335,7 +347,7 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                                 {status === 'searching' ? (<RefreshCw className="w-4 h-4 animate-spin" />) : "Find Matches"}
                             </button>
                         </div>
-                    ) : (
+                    ) : mode === 'manual' ? (
                         <div className="space-y-4">
                             <p className="text-sm text-slate-500 mb-4">
                                 Draw a box around the address you want to replace.
@@ -369,6 +381,72 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                                 </div>
                             )}
                         </div>
+                    ) : (
+                        <div className="space-y-6">
+                            <p className="text-sm text-slate-500">
+                                Shift the entire page content to fix uneven scanner margins.
+                            </p>
+
+                            <div className="border rounded-xl overflow-hidden shadow-sm">
+                                <PdfPreview
+                                    file={file}
+                                    onSelectionChange={() => { }}
+                                    initialPage={1}
+                                    pageShift={pageShift}
+                                />
+                            </div>
+
+                            {/* X Axis */}
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-sm font-medium text-slate-700">
+                                    <span>Horizontal Shift</span>
+                                    <span className={clsx(pageShift.x !== 0 ? "text-blue-600" : "text-slate-400")}>{pageShift.x > 0 ? '+' : ''}{pageShift.x} px</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="-100"
+                                    max="100"
+                                    value={pageShift.x}
+                                    onChange={(e) => setPageShift(p => ({ ...p, x: parseInt(e.target.value) }))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                />
+                                <div className="flex justify-between text-xs text-slate-400">
+                                    <span>Move Left</span>
+                                    <span>Move Right</span>
+                                </div>
+                            </div>
+
+                            {/* Y Axis */}
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-sm font-medium text-slate-700">
+                                    <span>Vertical Shift</span>
+                                    <span className={clsx(pageShift.y !== 0 ? "text-blue-600" : "text-slate-400")}>{pageShift.y > 0 ? '+' : ''}{pageShift.y} px</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="-100"
+                                    max="100"
+                                    value={pageShift.y}
+                                    onChange={(e) => setPageShift(p => ({ ...p, y: parseInt(e.target.value) }))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                />
+                                <div className="flex justify-between text-xs text-slate-400">
+                                    <span>Move Up</span>
+                                    <span>Move Down</span>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-center p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500">
+                                Tip: Positive X moves Right. Positive Y moves Down (on screen).
+                            </div>
+
+                            <button
+                                onClick={() => setPageShift({ x: 0, y: 0 })}
+                                className="text-sm text-slate-400 hover:text-slate-600 underline text-center w-full block"
+                            >
+                                Reset Position
+                            </button>
+                        </div>
                     )}
                 </div>
             </div>
@@ -379,7 +457,7 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                     layout
                     className={cn(
                         "bg-white p-6 rounded-3xl shadow-lg border border-slate-100 transition-all duration-500",
-                        ((mode === 'auto' && matches.length > 0) || (mode === 'manual' && manualSelection))
+                        ((mode === 'auto' && matches.length > 0) || (mode === 'manual' && manualSelection) || (mode === 'layout' && (pageShift.x !== 0 || pageShift.y !== 0)))
                             ? "opacity-100 translate-y-0"
                             : "opacity-50 translate-y-4 pointer-events-none grayscale"
                     )}

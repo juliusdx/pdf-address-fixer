@@ -189,5 +189,30 @@ export async function replaceAddress(file: File, matches: Match[], newText: stri
     }
 
     const pdfBytes = await pdfDoc.save();
-    return new Blob([pdfBytes], { type: 'application/pdf' });
+    return new Blob([pdfBytes as any], { type: 'application/pdf' });
+}
+
+export async function shiftPageContent(pdfBlob: Blob, xOffset: number, yOffset: number): Promise<Blob> {
+    if (xOffset === 0 && yOffset === 0) return pdfBlob;
+
+    const originalPdf = await PDFDocument.load(await pdfBlob.arrayBuffer());
+    const newPdf = await PDFDocument.create();
+
+    const embeddedPages = await newPdf.embedPdf(originalPdf);
+
+    for (let i = 0; i < embeddedPages.length; i++) {
+        const embeddedPage = embeddedPages[i];
+        const { width, height } = embeddedPage;
+
+        const newPage = newPdf.addPage([width, height]);
+
+        // Draw the embedded page onto the new page with offset
+        newPage.drawPage(embeddedPage, {
+            x: xOffset,
+            y: yOffset,
+        });
+    }
+
+    const pdfBytes = await newPdf.save();
+    return new Blob([pdfBytes as any], { type: 'application/pdf' });
 }

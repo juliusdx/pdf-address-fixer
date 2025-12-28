@@ -7,9 +7,10 @@ interface PdfPreviewProps {
     onSelectionChange: (rect: { x: number; y: number; width: number; height: number; pageIndex: number; viewportHeight: number } | null) => void;
     initialPage?: number;
     onLoadSuccess?: (numPages: number) => void;
+    pageShift?: { x: number; y: number };
 }
 
-export function PdfPreview({ file, onSelectionChange, initialPage = 1, onLoadSuccess }: PdfPreviewProps) {
+export function PdfPreview({ file, onSelectionChange, initialPage = 1, onLoadSuccess, pageShift = { x: 0, y: 0 } }: PdfPreviewProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [scale, setScale] = useState(1.0);
@@ -176,6 +177,10 @@ export function PdfPreview({ file, onSelectionChange, initialPage = 1, onLoadSuc
                         onMouseMove={handleMouseMove}
                         onMouseUp={handleMouseUp}
                         onMouseLeave={handleMouseUp}
+                        style={{
+                            transform: `translate(${pageShift.x}px, ${pageShift.y}px)`,
+                            transition: 'transform 0.2s ease-out'
+                        }}
                     />
 
                     {/* Draw Selection Overlay */}
