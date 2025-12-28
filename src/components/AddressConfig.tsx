@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, Search, Download, RefreshCw, CheckCircle, AlertCircle, Eye, EyeOff, MousePointer2, Save, Trash2 } from 'lucide-react';
+import { FileText, Search, Download, RefreshCw, CheckCircle, AlertCircle, Eye, EyeOff, MousePointer2, Save, Trash2, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { findMatches, replaceAddress, getPdfText, type Match } from '../lib/pdf-utils';
 import { PdfPreview } from './PdfPreview';
@@ -33,6 +33,8 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
 
     // Manual State
     const [manualSelection, setManualSelection] = useState<Match | null>(null);
+    const [numPages, setNumPages] = useState(0);
+    const [applyToAll, setApplyToAll] = useState(false);
 
     // Common State
     const [newAddress, setNewAddress] = useState('123 New Address St,\nNew City, State 12345');
@@ -149,7 +151,25 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
 
             await new Promise(r => setTimeout(r, 1000));
 
-            const matchesToUse = mode === 'auto' ? matches : (manualSelection ? [manualSelection] : []);
+            await new Promise(r => setTimeout(r, 1000));
+
+            let matchesToUse: Match[] = [];
+
+            if (mode === 'auto') {
+                matchesToUse = matches;
+            } else if (manualSelection) {
+                if (applyToAll && numPages > 0) {
+                    // Create a match for every page
+                    for (let i = 0; i < numPages; i++) {
+                        matchesToUse.push({
+                            ...manualSelection,
+                            pageIndex: i
+                        });
+                    }
+                } else {
+                    matchesToUse = [manualSelection];
+                }
+            }
 
             const blob = await replaceAddress(file, matchesToUse, newAddress);
             const url = URL.createObjectURL(blob);
@@ -320,11 +340,32 @@ export function AddressConfig({ file, onReset }: AddressConfigProps) {
                             <p className="text-sm text-slate-500 mb-4">
                                 Draw a box around the address you want to replace.
                             </p>
-                            <PdfPreview file={file} onSelectionChange={handleManualSelection} />
+                            <PdfPreview
+                                key={hasLoadedConfig ? `loaded-${manualSelection?.pageIndex}` : 'loading'}
+                                file={file}
+                                onSelectionChange={handleManualSelection}
+                                initialPage={manualSelection ? manualSelection.pageIndex + 1 : 1}
+                                onLoadSuccess={setNumPages}
+                            />
                             {manualSelection && (
-                                <div className="text-xs text-green-600 font-bold flex items-center gap-1">
-                                    <CheckCircle className="w-3 h-3" />
-                                    Selection active: {Math.round(manualSelection.width)}x{Math.round(manualSelection.height)} coords.
+                                <div className="flex flex-col gap-2">
+                                    <div className="text-xs text-green-600 font-bold flex items-center gap-1">
+                                        <CheckCircle className="w-3 h-3" />
+                                        Selection active: {Math.round(manualSelection.width)}x{Math.round(manualSelection.height)} coords.
+                                    </div>
+
+                                    <label className="flex items-center gap-2 p-3 bg-indigo-50 border border-indigo-100 rounded-lg cursor-pointer hover:bg-indigo-100 transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={applyToAll}
+                                            onChange={(e) => setApplyToAll(e.target.checked)}
+                                            className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                                        />
+                                        <div className="flex items-center gap-2 text-sm font-semibold text-indigo-900">
+                                            <Layers className="w-4 h-4" />
+                                            <span>Apply to all {numPages > 0 ? numPages : ''} pages</span>
+                                        </div>
+                                    </label>
                                 </div>
                             )}
                         </div>
